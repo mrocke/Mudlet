@@ -88,6 +88,8 @@ cTelnet::cTelnet(Host* pH, const QString& profileName)
 , iac2()
 , insb()
 , recvdGA()
+, lastOutputWasGA(false)
+, ireBugfixInsideColorCode(false)
 , mEncoding()
 , mpPostingTimer(new QTimer(this))
 , mUSE_IRE_DRIVER_BUGFIX(false)
@@ -2423,38 +2425,6 @@ void cTelnet::gotPrompt(std::string& mud_data)
     mpPostingTimer->stop();
     mMudData += mud_data;
 
-    if (mUSE_IRE_DRIVER_BUGFIX && mGA_Driver) {
-        //////////////////////////////////////////////////////////////////////
-        //
-        // Patch for servers that need GA/EOR for prompt fixups
-        //
-
-        int j = 0;
-        int s = mMudData.size();
-        while (j < s) {
-            // search for leading <LF> but skip leading ANSI control sequences
-            if (mMudData[j] == 0x1B) {
-                while (j < s) {
-                    if (mMudData[j] == 'm') {
-                        goto NEXT;
-                        break;
-                    }
-                    ++j;
-                }
-            }
-            if (mMudData[j] == '\n') {
-                mMudData.erase(j, 1);
-                break;
-            } else {
-                break;
-            }
-        NEXT:
-            ++j;
-        }
-        //
-        ////////////////////////////
-    }
-
     postData();
     mMudData = "";
     mIsTimerPosting = false;
@@ -2892,7 +2862,44 @@ void cTelnet::processSocketData(char* in_buffer, int amount)
                     QApplication::alert(mudlet::self(), 3000);
                 }
                 if (ch != '\r' && ch != '\0') {
-                    cleandata += ch;
+                    // If we are here 'ch' is some printable output or part of a olor code
+
+                    //////////////////////////////////////////////////////////////////////
+                    //
+                    // Patch for servers that need GA/EOR for prompt fixups
+                    //  
+
+                    // If the checkbox is checked, we are on a GA server, and the last thing received was GA...
+                    if( mUSE_IRE_DRIVER_BUGFIX && mGA_Driver && lastOutputWasGA ) {
+                      
+                        //printf("** lastOutputWasGA = true, ch = %d\n", (int)ch );  // for testing
+                        bool ok = true;
+                        
+                        if (ch == 0x1B) {   // We hit the start of a color code
+                            ireBugfixInsideColorCode = true;
+                            // OK to send
+                        } else {
+                            if( ireBugfixInsideColorCode == true ) { // We're inside a color code
+                                if( ch == 'm' ) // We hit the end of a color code
+                                    ireBugfixInsideColorCode = false;
+                                // OK to send
+                            } else {
+                                // We have some non-color-code output, is it a new line?                                
+                                if( ch == '\n') {
+                                    ok = false;
+                                }
+                                lastOutputWasGA = false;
+                            }
+                        }
+                        
+                        if( ok )
+                            cleandata += ch;
+                        //else
+                        //    cleandata += "$";     // help point out where the removed \n was
+
+                    } else {
+                        cleandata += ch;
+                    }
                 }
             }
         MAIN_LOOP_END:;
@@ -2909,6 +2916,7 @@ void cTelnet::processSocketData(char* in_buffer, int amount)
                     cleandata.push_back('\xff');
                     recvdGA = false;
                     gotPrompt(cleandata);
+                    lastOutputWasGA = true;      // if the last output received was GA/prompt, set this flag for the IRE extra \n bugfix
                     cleandata = "";
                 } else {
                     cleandata.push_back('\n');

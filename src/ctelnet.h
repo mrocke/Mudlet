@@ -277,6 +277,8 @@ private:
     // enable our use of the option!
     bool triedToEnable[256];
     bool recvdGA;
+    bool lastOutputWasGA;
+    bool ireBugfixInsideColorCode;
 
     QString termType;
     QByteArray mEncoding;
